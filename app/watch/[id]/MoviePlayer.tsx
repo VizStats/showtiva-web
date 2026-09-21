@@ -62,6 +62,10 @@ interface MoviePlayerProps {
   series?: PlayerSeries;
   /** Present when there is a next episode to go to. */
   onNext?: () => void;
+  /** Seconds into this title to open at, measured from its own start. */
+  resumeAt?: number;
+  /** Where playback is, every few seconds and on pause, end and close. */
+  onProgress?: (seconds: number, duration: number) => void;
 }
 
 /** "S03E04", the way episode lists label them. */
@@ -300,7 +304,7 @@ const CheckIcon = () => (
 
 /* ------------------------------------------------------------- component -- */
 
-export default function MoviePlayer({ title, episodeLabel, media, poster, onClose, series, onNext }: MoviePlayerProps) {
+export default function MoviePlayer({ title, episodeLabel, media, poster, onClose, series, onNext, resumeAt, onProgress }: MoviePlayerProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -415,6 +419,7 @@ export default function MoviePlayer({ title, episodeLabel, media, poster, onClos
   const stopAndClose = () => {
     const video = videoRef.current;
     if (video) {
+      report(true);
       resumeRef.current = null;
       video.pause();
       if (document.pictureInPictureElement === video) void document.exitPictureInPicture().catch(() => undefined);
@@ -621,12 +626,35 @@ export default function MoviePlayer({ title, episodeLabel, media, poster, onClos
     ...media.fallbacks,
   ];
   const sourceKey = sources.join("|");
+  const base = chosen ? (media.startAt ?? 0) : 0;
+  const lastReportRef = useRef(0);
+  const report = (force = false) => {
+    const video = videoRef.current;
+    if (!video || !onProgress || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    // Every 3 seconds of film, not of wall clock: a paused film has nothing new to say.
+    if (!force && Math.abs(video.currentTime - lastReportRef.current) < 3) return;
+    lastReportRef.current = video.currentTime;
+    onProgress(Math.max(0, video.currentTime - base), Math.max(0, video.duration - base));
+  };
+  // The latest resume point, read by the load effect below without making it
+  // reload whenever the parent re-renders.
+  const resumeAtRef = useRef({ resumeAt, base });
+  useEffect(() => {
+    resumeAtRef.current = { resumeAt, base };
+  });
   // The scrubber's thumbnails come from the smallest encode: a frame the size
   // of a stamp does not need the 4K file seeking around behind it.
   const previewSrc = media.renditions[0]?.url ?? media.fallbacks[0];
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !sourceKey) return;
+    // Opening a title or episode where it was left: the metadata handler
+    // below seeks there once the file is ready. A quality change sets its own
+    // resume point first and wins.
+    const saved = resumeAtRef.current;
+    if (!resumeRef.current && saved.resumeAt && saved.resumeAt > 0) {
+      resumeRef.current = { time: saved.resumeAt + saved.base, playing: true };
+    }
     video.load();
     // A quality change that happened while paused stays paused.
     if (resumeRef.current && !resumeRef.current.playing) return;
@@ -791,10 +819,14 @@ export default function MoviePlayer({ title, episodeLabel, media, poster, onClos
           setEnded(false);
           wake();
         }}
-        onPause={() => setPaused(true)}
+        onPause={() => {
+          setPaused(true);
+          report(true);
+        }}
         onEnded={() => {
           setPaused(true);
           setEnded(true);
+          report(true);
         }}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
@@ -824,6 +856,7 @@ export default function MoviePlayer({ title, episodeLabel, media, poster, onClos
         }}
         onTimeUpdate={(event) => {
           if (!scrubbing) setCurrent(event.currentTarget.currentTime);
+          report();
         }}
         onProgress={(event) => {
           const ranges = event.currentTarget.buffered;

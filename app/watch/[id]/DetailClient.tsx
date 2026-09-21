@@ -9,7 +9,7 @@
 //
 // Spacing runs on a single rhythm unit (--step) and its halves, so every
 // section lands on the same vertical grid at every breakpoint.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -22,6 +22,16 @@ import type { Brand, DetailLabels, FooterContent, PopoverLabels } from "@/lib/si
 import PosterCard from "../PosterCard";
 import MoviePlayer, { episodeCode, type PlayerMedia, type PlayerPick, type Rendition } from "./MoviePlayer";
 import SearchOverlay from "../SearchOverlay";
+import {
+  fractionWatched,
+  parsePick,
+  parseProgress,
+  progressKey,
+  readRaw,
+  resumeSeconds,
+  saveProgress,
+  subscribeProgress,
+} from "@/lib/watch-progress";
 import SiteFooter from "../SiteFooter";
 import TitlePopover, { useTitlePopover } from "../TitlePopover";
 
@@ -172,7 +182,28 @@ export default function DetailClient({
     router.push(getSignupHref(returnTo));
   };
 
+  // How far this title has been watched on this device. The stored string is
+  // the snapshot, so an unchanged entry never re-renders the page; the server
+  // has no storage, so it renders the no-progress state.
+  const progressRaw = useSyncExternalStore(subscribeProgress, () => readRaw(movie.id), () => null);
+  const progress = useMemo(() => parseProgress(progressRaw), [progressRaw]);
+
+  // The last thing played here, if it still exists in the title.
+  const savedPick = (() => {
+    const candidate = progress ? parsePick(progress.last) : null;
+    if (!candidate) return null;
+    if (candidate === "trailer") return isSeries ? null : candidate;
+    const exists = seasons.some((s) => s.number === candidate.season && s.episodes.some((e) => e.number === candidate.episode));
+    return exists ? candidate : null;
+  })();
+  const savedPosition = savedPick && progress ? progress.items[progressKey(savedPick)] : undefined;
+  const watchedFraction = fractionWatched(savedPosition);
+  const canResume = resumeSeconds(savedPosition) > 0;
+
+  // Play picks up where this device left off: the same episode, the same moment.
   const startPlayer = () => {
+    if (savedPick) setPick(savedPick);
+    if (savedPick && savedPick !== "trailer") setListSeasonNumber(savedPick.season);
     setPlaying(true);
   };
 
@@ -295,6 +326,8 @@ export default function DetailClient({
         onOpenTitle: (id) => router.push(`/watch/${id}`),
       }}
       onNext={nextPick ? () => choose(nextPick) : undefined}
+      resumeAt={resumeSeconds(progress?.items[progressKey(pick)])}
+      onProgress={(seconds, length) => saveProgress(movie.id, progressKey(pick), seconds, length)}
     />
   );
 
@@ -350,7 +383,7 @@ export default function DetailClient({
           >
             <path d="M0 0v14l12-7z" fill="currentColor" />
           </svg>
-          <span>{labels.play}</span>
+          <span>{canResume ? "Resume" : labels.play}</span>
         </button>
 
         {/* The hairline outline is a clipped layer rather than a border,
@@ -457,14 +490,62 @@ export default function DetailClient({
       </header>
 
       <main className="flex-1 pb-[clamp(6rem,10vw,10rem)]">
-        {/* The opening screen is the title's still, full-bleed, blurring and
-            darkening into the page towards its foot, with the title and
-            description set inside that blur. 65% of the screen, 58% on a phone. The
-            floor is only what the title, description and buttons need: a higher
-            one outvoted the percentage on laptop-height windows, so the banner
-            never looked any shorter there. */}
-        <div className="relative h-[65vh] min-h-[27rem] w-full overflow-hidden bg-[#101010] max-[768px]:h-[58vh] max-[768px]:min-h-[400px]">
+        {/* The opening screen is the title's still, full-bleed and the full
+            height of the screen, blurring and darkening into the page towards
+            its foot, with the title and description set inside that blur. */}
+        <div className="relative h-svh min-h-[36rem] w-full overflow-hidden bg-[#101010]">
           <img className="absolute inset-0 block h-full w-full object-cover object-[center_28%]" src={movie.backdrop} alt="" />
+
+            {/* The big play button, ringed in red by how much of it has been
+                watched on this device, so coming back shows where you are. */}
+            <div className="absolute top-[42%] left-1/2 z-[3] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3.5 max-[768px]:top-[36%] [@media(max-height:760px)]:top-[34%]">
+              <button
+                type="button"
+                className="group/play relative grid size-[clamp(4.5rem,min(8.5vw,13vh),7.25rem)] cursor-pointer place-items-center rounded-full border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink"
+                aria-label={
+                  canResume
+                    ? `Resume ${movie.title}, ${Math.round(watchedFraction * 100)}% watched`
+                    : `Play ${movie.title}`
+                }
+                onClick={startPlayer}
+              >
+                <svg className="absolute inset-0 size-full -rotate-90 drop-shadow-[0_6px_20px_rgba(0,0,0,0.45)]" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+                  <circle cx="60" cy="60" r="56" fill="none" stroke="rgba(255,255,255,0.24)" strokeWidth="4" />
+                  {watchedFraction > 0 && (
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r="56"
+                      fill="none"
+                      stroke="#ff3040"
+                      strokeWidth="4.5"
+                      strokeLinecap="round"
+                      pathLength={100}
+                      strokeDasharray={`${Math.max(1.5, watchedFraction * 100)} 100`}
+                    />
+                  )}
+                </svg>
+                <span className="grid size-[80%] place-items-center rounded-full border border-[rgba(255,255,255,0.22)] bg-[rgba(255,255,255,0.14)] text-white backdrop-blur-[14px] transition-[background-color,scale] duration-300 ease-[cubic-bezier(0.2,0.7,0.2,1)] group-hover/play:scale-105 group-hover/play:bg-[rgba(255,255,255,0.26)] motion-reduce:transition-none">
+                  <svg className="ml-[6%] size-[36%]" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M7 4.8v14.4a1 1 0 0 0 1.52.85l11.3-7.2a1 1 0 0 0 0-1.7L8.52 3.95A1 1 0 0 0 7 4.8z" fill="currentColor" />
+                  </svg>
+                </span>
+              </button>
+
+              {savedPosition && watchedFraction > 0 && (
+                <p className="rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.42)] px-3.5 py-1.5 text-[0.74rem] font-semibold whitespace-nowrap text-white tabular-nums backdrop-blur-[12px]">
+                  {watchedFraction >= 1 ? (
+                    <>Watched{savedPick !== "trailer" && savedPick ? ` S${savedPick.season}:E${savedPick.episode}` : ""} · Play again</>
+                  ) : (
+                    <>
+                      Resume{savedPick !== "trailer" && savedPick ? ` S${savedPick.season}:E${savedPick.episode}` : ""}
+                      <span className="text-[rgba(255,255,255,0.6)]"> · </span>
+                      {Math.max(1, Math.round((savedPosition.d - savedPosition.t) / 60))} min left
+                    </>
+                  )}
+                </p>
+              )}
+            </div>
 
           {/* Black frosted band behind the floating header. A gradient
               alone let a bright or busy still show through behind the
@@ -570,6 +651,7 @@ export default function DetailClient({
             >
               {(seasons.find((season) => season.number === listSeasonNumber) ?? seasons[0]).episodes.map((episode) => {
                 const here = { season: listSeasonNumber, episode: episode.number };
+                const watched = fractionWatched(progress?.items[progressKey(here)]);
                 const isNow = playing && pick !== "trailer" && pick.season === here.season && pick.episode === here.episode;
                 return (
                   <li key={episode.number} className="w-[clamp(16rem,24vw,20.5rem)] flex-none snap-start max-[640px]:w-[78vw]">
@@ -594,6 +676,13 @@ export default function DetailClient({
                           loading="lazy"
                         />
                         <span className="absolute inset-0 bg-[image:linear-gradient(to_top,rgba(0,0,0,0.82),rgba(0,0,0,0)_58%)]" aria-hidden="true" />
+
+                        {/* How much of this episode has been watched here. */}
+                        {watched > 0 && (
+                          <span className="absolute inset-x-0 bottom-0 z-[1] h-[3px] bg-[rgba(255,255,255,0.22)]" aria-hidden="true">
+                            <span className="block h-full bg-[#ff3040]" style={{ width: `${watched * 100}%` }} />
+                          </span>
+                        )}
 
                         {isNow && (
                           <span className="absolute top-2.5 left-2.5 rounded-full bg-[#ff3040] px-2.5 py-1 text-[0.58rem] leading-none font-bold tracking-[0.14em] text-white uppercase">
