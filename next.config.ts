@@ -20,6 +20,17 @@ const nextConfig: NextConfig = {
     "/browse/[section]": ["./data/**"],
     "/api/**": ["./data/**"],
   },
+  // In development: no page, image or video on this site is indexed. There is
+  // deliberately no robots.txt Disallow, because a crawler that may not fetch
+  // a page never sees its noindex.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
