@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://showtiva-site.vercel.app">
+  <a href="https://dev.showtiva.com">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.png">
       <img src=".github/logo-light.png" alt="ShowTiva" width="380">
@@ -25,7 +25,7 @@
 
 ShowTiva is a curated, family-safe destination for films, series, shorts, documentaries and imaginative entertainment. Every title is human-vetted before it is published, the whole platform sits under a PG ceiling, and creators keep full ownership of their work.
 
-This repository is the web front end. It is an early, UI-first build: the catalog is placeholder data, sign-in is a demo that runs entirely in the browser, and the player has no video source yet. A preview is deployed at [showtiva-site.vercel.app](https://showtiva-site.vercel.app).
+This repository is the web front end. It is an early, UI-first build: the catalog is placeholder data, sign-in is a demo that runs entirely in the browser, and the player has no video source yet. A preview is deployed at [showtiva-web.vercel.app](https://dev.showtiva.com).
 
 ## Getting started
 
